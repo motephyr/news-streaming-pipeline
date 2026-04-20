@@ -3,7 +3,7 @@
 #
 # PostgreSQL：以容器方式運行（postgres 服務），資料持久化於 postgres_data volume
 #
-# 服務啟動順序：zookeeper → kafka → postgres → producer / consumer → airflow
+# 服務啟動順序：zookeeper → kafka → postgres → producer / consumer → airflow / dashboard
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
@@ -132,6 +132,19 @@ services:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
       - airflow_logs:/opt/airflow/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: on-failure
+
+  # ── 8. Streamlit Dashboard ────────────────────────────────────────────────────
+  # 報表視覺化 UI（http://localhost:3000）
+  dashboard:
+    build: ./dashboard
+    container_name: dashboard
+    ports:
+      - "8501:8501"
+    env_file: .env
     depends_on:
       postgres:
         condition: service_healthy
