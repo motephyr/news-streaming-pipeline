@@ -27,43 +27,31 @@ if [ ! -f .env ]; then
 fi
 echo "[1/5] .env 已存在，跳過。"
 
-# ── Step 2: 確認 PostgreSQL 可連線 ───────────────────────────────────────────
+# ── Step 2: 等待 PostgreSQL 容器健康 ─────────────────────────────────────────
 echo ""
-echo "[2/5] 確認本機 PostgreSQL 連線..."
+echo "[2/5] 啟動 PostgreSQL 容器並等待就緒..."
 source .env
 
-# 用 psql 確認連線（需要本機有安裝 psql client）
-if command -v psql &> /dev/null; then
-  if psql -h localhost -p "${POSTGRES_PORT:-5432}" \
-          -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT 1;" &> /dev/null; then
-    echo "  PostgreSQL 連線成功。"
-  else
-    echo "  ❌ 無法連線到 PostgreSQL！請確認："
-    echo "     1. 本機 PostgreSQL 正在運行（port ${POSTGRES_PORT:-5432}）"
-    echo "     2. database '$POSTGRES_DB' 已建立"
-    echo "     3. user '$POSTGRES_USER' 有連線權限"
-    echo ""
-    echo "  快速建立 DB 的指令："
-    echo "     createdb -U postgres $POSTGRES_DB"
-    echo "     psql -U postgres -c \"CREATE USER $POSTGRES_USER WITH PASSWORD '$POSTGRES_PASSWORD';\""
-    echo "     psql -U postgres -c \"GRANT ALL PRIVILEGES ON DATABASE $POSTGRES_DB TO $POSTGRES_USER;\""
-    exit 1
-  fi
-else
-  echo "  psql 未安裝，跳過連線確認（若 DB 連線有問題，Consumer log 會顯示錯誤）。"
-fi
+docker compose up -d postgres
 
-# ── Step 3: 初始化資料庫 Table ────────────────────────────────────────────────
+echo -n "  等待 postgres 健康檢查通過"
+until docker compose exec postgres pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" &> /dev/null; do
+  echo -n "."
+  sleep 2
+done
 echo ""
-echo "[3/5] 初始化資料庫 tables..."
-if command -v psql &> /dev/null; then
-  psql -h localhost -p "${POSTGRES_PORT:-5432}" \
-       -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
-       -f database/init.sql
-  echo "  Tables 建立完成。"
+echo "  PostgreSQL 已就緒。"
+
+# ── Step 3: 確認資料表已建立 ──────────────────────────────────────────────────
+echo ""
+echo "[3/5] 確認資料表已建立（由容器自動執行 init.sql）..."
+TABLE_COUNT=$(docker compose exec postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc \
+  "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('news_articles','pipeline_stats');")
+if [ "$TABLE_COUNT" -eq 2 ]; then
+  echo "  news_articles、pipeline_stats 資料表建立完成。"
 else
-  echo "  psql 未安裝，請手動執行："
-  echo "     psql -U $POSTGRES_USER -d $POSTGRES_DB -f database/init.sql"
+  echo "  ❌ 資料表未建立，請檢查 database/init.sql 是否正確。"
+  exit 1
 fi
 
 # ── Step 4: 初始化 Airflow DB ─────────────────────────────────────────────────

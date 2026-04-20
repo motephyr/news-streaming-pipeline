@@ -3,10 +3,9 @@ version: "3.8"
 # ─────────────────────────────────────────────────────────────────────────────
 # News Real-time Streaming Pipeline
 #
-# PostgreSQL：使用本機已在運行的 PostgreSQL（port 5432）
-# 容器內連接本機 DB 需使用 host.docker.internal（macOS/Windows Docker Desktop 支援）
+# PostgreSQL：以容器方式運行（postgres 服務），資料持久化於 postgres_data volume
 #
-# 服務啟動順序：zookeeper → kafka → producer / consumer → airflow
+# 服務啟動順序：zookeeper → kafka → postgres → producer / consumer → airflow
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
@@ -52,7 +51,28 @@ services:
       timeout: 10s
       retries: 10
 
-  # ── 3. Kafka Producer ────────────────────────────────────────────────────────
+  # ── 3. PostgreSQL ────────────────────────────────────────────────────────────
+  # 資料庫容器：consumer 寫入新聞文章，Airflow 使用 metadata DB
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    env_file: .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── 4. Kafka Producer ────────────────────────────────────────────────────────
   # 每隔 FETCH_INTERVAL_SECONDS 秒從 NewsAPI 抓新聞，推入 Kafka topic
   producer:
     build: ./producer
@@ -63,21 +83,20 @@ services:
     env_file: .env
     restart: on-failure
 
-  # ── 4. Kafka Consumer ────────────────────────────────────────────────────────
-  # 持續讀取 Kafka topic → 清洗 → 寫入本機 PostgreSQL
+  # ── 5. Kafka Consumer ────────────────────────────────────────────────────────
+  # 持續讀取 Kafka topic → 清洗 → 寫入 PostgreSQL 容器
   consumer:
     build: ./consumer
     container_name: consumer
     depends_on:
       kafka:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     env_file: .env
     restart: on-failure
-    # 在 macOS/Windows Docker Desktop 上，host.docker.internal 指向宿主機
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
 
-  # ── 5. Airflow Webserver ──────────────────────────────────────────────────────
+  # ── 6. Airflow Webserver ──────────────────────────────────────────────────────
   # DAG 管理 UI（http://localhost:8080）
   airflow-webserver:
     build: ./airflow
@@ -87,8 +106,7 @@ services:
       - "8080:8080"
     env_file: .env
     environment:
-      # Airflow metadata 也存在本機 PostgreSQL
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@host.docker.internal:${POSTGRES_PORT}/${POSTGRES_DB}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
@@ -96,11 +114,12 @@ services:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
       - airflow_logs:/opt/airflow/logs
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: on-failure
 
-  # ── 6. Airflow Scheduler ──────────────────────────────────────────────────────
+  # ── 7. Airflow Scheduler ──────────────────────────────────────────────────────
   # 負責實際觸發 DAG 執行
   airflow-scheduler:
     build: ./airflow
@@ -108,17 +127,19 @@ services:
     command: scheduler
     env_file: .env
     environment:
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@host.docker.internal:${POSTGRES_PORT}/${POSTGRES_DB}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
       - airflow_logs:/opt/airflow/logs
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: on-failure
 
 # ── Volumes ───────────────────────────────────────────────────────────────────
 volumes:
   airflow_logs:
+  postgres_data:
