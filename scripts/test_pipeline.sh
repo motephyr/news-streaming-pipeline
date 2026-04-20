@@ -31,8 +31,7 @@ docker compose logs --tail=10 consumer
 # ── Test 4: 確認 PostgreSQL 有資料 ──────────────────────────────────────────
 echo ""
 echo "[Test 4] PostgreSQL 資料筆數："
-psql -h localhost -p "${POSTGRES_PORT:-5432}" \
-     -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+docker compose exec postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
      -c "SELECT COUNT(*) AS total_articles,
                 MIN(created_at) AS first_inserted,
                 MAX(created_at) AS last_inserted
@@ -40,8 +39,7 @@ psql -h localhost -p "${POSTGRES_PORT:-5432}" \
 
 echo ""
 echo "[Test 4b] 各來源文章數（Top 10）："
-psql -h localhost -p "${POSTGRES_PORT:-5432}" \
-     -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+docker compose exec postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
      -c "SELECT source_name, COUNT(*) AS count
          FROM news_articles
          GROUP BY source_name
