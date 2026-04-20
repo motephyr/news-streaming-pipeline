@@ -1,0 +1,21 @@
+# 環境變數（含 API key，絕對不能提交）
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# Docker
+*.log
+
+# Airflow 本機暫存
+airflow/logs/
+airflow/plugins/__pycache__/
+
+# macOS
+.DS_Store

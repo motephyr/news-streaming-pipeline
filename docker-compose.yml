@@ -1,0 +1,124 @@
+version: "3.8"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# News Real-time Streaming Pipeline
+#
+# PostgreSQL：使用本機已在運行的 PostgreSQL（port 5432）
+# 容器內連接本機 DB 需使用 host.docker.internal（macOS/Windows Docker Desktop 支援）
+#
+# 服務啟動順序：zookeeper → kafka → producer / consumer → airflow
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── 1. Zookeeper ────────────────────────────────────────────────────────────
+  # Kafka 用 Zookeeper 做 broker 協調（選主、記錄 metadata）
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo ruok | nc localhost 2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── 2. Kafka Broker ──────────────────────────────────────────────────────────
+  # 訊息佇列核心：Producer 推入、Consumer 讀取
+  # PLAINTEXT_HOST 供宿主機（localhost:29092）連線用（例如用 kafka-python 本機測試）
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "29092:29092"   # 宿主機連線用
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # 兩個 listener：容器內互聯用 PLAINTEXT，宿主機連線用 PLAINTEXT_HOST
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 24
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  # ── 3. Kafka Producer ────────────────────────────────────────────────────────
+  # 每隔 FETCH_INTERVAL_SECONDS 秒從 NewsAPI 抓新聞，推入 Kafka topic
+  producer:
+    build: ./producer
+    container_name: producer
+    depends_on:
+      kafka:
+        condition: service_healthy
+    env_file: .env
+    restart: on-failure
+
+  # ── 4. Kafka Consumer ────────────────────────────────────────────────────────
+  # 持續讀取 Kafka topic → 清洗 → 寫入本機 PostgreSQL
+  consumer:
+    build: ./consumer
+    container_name: consumer
+    depends_on:
+      kafka:
+        condition: service_healthy
+    env_file: .env
+    restart: on-failure
+    # 在 macOS/Windows Docker Desktop 上，host.docker.internal 指向宿主機
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # ── 5. Airflow Webserver ──────────────────────────────────────────────────────
+  # DAG 管理 UI（http://localhost:8080）
+  airflow-webserver:
+    build: ./airflow
+    container_name: airflow-webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    env_file: .env
+    environment:
+      # Airflow metadata 也存在本機 PostgreSQL
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@host.docker.internal:${POSTGRES_PORT}/${POSTGRES_DB}
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - airflow_logs:/opt/airflow/logs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: on-failure
+
+  # ── 6. Airflow Scheduler ──────────────────────────────────────────────────────
+  # 負責實際觸發 DAG 執行
+  airflow-scheduler:
+    build: ./airflow
+    container_name: airflow-scheduler
+    command: scheduler
+    env_file: .env
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@host.docker.internal:${POSTGRES_PORT}/${POSTGRES_DB}
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - airflow_logs:/opt/airflow/logs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: on-failure
+
+# ── Volumes ───────────────────────────────────────────────────────────────────
+volumes:
+  airflow_logs:
