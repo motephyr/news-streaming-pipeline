@@ -1,0 +1,1 @@
+psycopg2-binary==2.9.9   # 讓 Airflow DAG 可直接查詢 PostgreSQL
