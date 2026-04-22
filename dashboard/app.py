@@ -56,12 +56,13 @@ col1, col2, col3, col4 = st.columns(4)
 if not stats_df.empty:
     latest = stats_df.iloc[-1]
     col1.metric("今日文章數", int(latest["total_articles"]))
-    col2.metric("今日重複數", int(latest["duplicate_count"]))
-    col3.metric("今日錯誤數", int(latest["error_count"]))
+    sources_map = latest["sources"] if isinstance(latest["sources"], dict) else {}
+    col2.metric("來源數", len(sources_map))
+    col3.metric("最新報表日", str(latest["report_date"]))
 else:
     col1.metric("今日文章數", "—")
-    col2.metric("今日重複數", "—")
-    col3.metric("今日錯誤數", "—")
+    col2.metric("來源數", "—")
+    col3.metric("最新報表日", "—")
 
 col4.metric("資料庫累積總數", total)
 
@@ -80,20 +81,6 @@ if not stats_df.empty:
     st.plotly_chart(fig1, use_container_width=True)
 else:
     st.info("尚無統計資料，請先在 Airflow 觸發 daily_statistics_report DAG。")
-
-# ── 重複與錯誤趨勢 ────────────────────────────────────────────────────────────
-st.subheader("每日重複與錯誤數")
-if not stats_df.empty:
-    fig2 = px.bar(
-        stats_df,
-        x="report_date",
-        y=["duplicate_count", "error_count"],
-        barmode="group",
-        labels={"report_date": "日期", "value": "筆數", "variable": "類型"},
-    )
-    st.plotly_chart(fig2, use_container_width=True)
-
-st.divider()
 
 # ── 各來源文章數 ──────────────────────────────────────────────────────────────
 st.subheader("各來源文章數（Top 15）")

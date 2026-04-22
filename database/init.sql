@@ -38,6 +38,10 @@ CREATE TABLE IF NOT EXISTS pipeline_stats (
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- report_date 唯一：確保每日統計可用 UPSERT，重跑同一天不會新增重複列
+CREATE UNIQUE INDEX IF NOT EXISTS uq_pipeline_stats_report_date
+    ON pipeline_stats(report_date);
+
 -- ── Indexes ───────────────────────────────────────────────────────────────────
 -- article_id 用於去重查詢（ON CONFLICT 時使用）
 CREATE INDEX IF NOT EXISTS idx_articles_article_id

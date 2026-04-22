@@ -19,7 +19,6 @@ daily_report_dag.py — 每日批次統計 DAG
   或用 EmailOperator 每天寄發報表給 stakeholders。
 """
 
-import json
 import os
 from datetime import timedelta
 
@@ -78,14 +77,21 @@ def generate_daily_report(**context):
         sources = {row[0] or "Unknown": row[1] for row in cur.fetchall()}
 
         # ── 3. 寫入統計結果 ────────────────────────────────────────────────────
-        # ON CONFLICT DO NOTHING：確保重跑 DAG 不會重複寫入
+        # ON CONFLICT (report_date) DO UPDATE：
+        # 需要搭配 DB 的 unique index (report_date)。
+        # 這樣重跑同一天會覆蓋該日統計，確保冪等。
         cur.execute(
             """
-            INSERT INTO pipeline_stats (report_date, total_articles, sources)
-            VALUES (%s, %s, %s)
-            ON CONFLICT DO NOTHING
+            INSERT INTO pipeline_stats (report_date, total_articles, duplicate_count, error_count, sources)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (report_date)
+            DO UPDATE SET
+                total_articles = EXCLUDED.total_articles,
+                duplicate_count = EXCLUDED.duplicate_count,
+                error_count = EXCLUDED.error_count,
+                sources = EXCLUDED.sources
             """,
-            (report_date, total_articles, Json(sources)),
+            (report_date, total_articles, 0, 0, Json(sources)),
         )
 
     conn.commit()

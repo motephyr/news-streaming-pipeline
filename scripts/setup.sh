@@ -7,9 +7,18 @@
 
 set -e  # 任何指令失敗就立即停止
 
+COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.full.yml}"
+DC=(docker compose -f "$COMPOSE_FILE")
+
+if [ ! -f "$COMPOSE_FILE" ]; then
+  echo "❌ 找不到 compose 檔案：$COMPOSE_FILE"
+  exit 1
+fi
+
 echo "======================================================"
 echo "  News Streaming Pipeline — 首次啟動設定"
 echo "======================================================"
+echo "  使用 compose 檔案：$COMPOSE_FILE"
 
 # ── Step 1: 確認 .env 存在 ────────────────────────────────────────────────────
 if [ ! -f .env ]; then
@@ -32,10 +41,10 @@ echo ""
 echo "[2/5] 啟動 PostgreSQL 容器並等待就緒..."
 source .env
 
-docker compose up -d postgres
+"${DC[@]}" up -d postgres
 
 echo -n "  等待 postgres 健康檢查通過"
-until docker compose exec postgres pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" &> /dev/null; do
+until "${DC[@]}" exec postgres pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" &> /dev/null; do
   echo -n "."
   sleep 2
 done
@@ -45,7 +54,7 @@ echo "  PostgreSQL 已就緒。"
 # ── Step 3: 確認資料表已建立 ──────────────────────────────────────────────────
 echo ""
 echo "[3/5] 確認資料表已建立（由容器自動執行 init.sql）..."
-TABLE_COUNT=$(docker compose exec postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc \
+TABLE_COUNT=$("${DC[@]}" exec postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc \
   "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('news_articles','pipeline_stats');")
 if [ "$TABLE_COUNT" -eq 2 ]; then
   echo "  news_articles、pipeline_stats 資料表建立完成。"
@@ -57,8 +66,8 @@ fi
 # ── Step 4: 初始化 Airflow DB ─────────────────────────────────────────────────
 echo ""
 echo "[4/5] 初始化 Airflow metadata..."
-docker compose run --rm airflow-webserver airflow db migrate
-docker compose run --rm airflow-webserver airflow users create \
+"${DC[@]}" run --rm airflow-webserver airflow db migrate
+"${DC[@]}" run --rm airflow-webserver airflow users create \
   --username "${AIRFLOW_ADMIN_USERNAME:-admin}" \
   --password "${AIRFLOW_ADMIN_PASSWORD:-admin}" \
   --firstname Admin \
@@ -70,7 +79,7 @@ echo "  Airflow 初始化完成。"
 # ── Step 5: 啟動所有服務 ──────────────────────────────────────────────────────
 echo ""
 echo "[5/5] 啟動所有服務..."
-docker compose up -d
+"${DC[@]}" up -d
 
 echo ""
 echo "======================================================"
@@ -81,8 +90,8 @@ echo "    Airflow UI: http://localhost:8080"
 echo "    帳號: ${AIRFLOW_ADMIN_USERNAME:-admin} / ${AIRFLOW_ADMIN_PASSWORD:-admin}"
 echo ""
 echo "  查看 logs："
-echo "    docker compose logs -f producer"
-echo "    docker compose logs -f consumer"
+echo "    docker compose -f $COMPOSE_FILE logs -f producer"
+echo "    docker compose -f $COMPOSE_FILE logs -f consumer"
 echo ""
 echo "  驗證資料："
 echo "    psql -U $POSTGRES_USER -d $POSTGRES_DB \\"
