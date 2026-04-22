@@ -40,8 +40,9 @@ NewsAPI
 |------|------|------|
 | Apache Kafka | 7.4.0 (Confluent) | 即時訊息佇列 |
 | Apache Airflow | 2.8.1 | Pipeline 排程與監控 |
-| PostgreSQL | 15 | 結構化資料儲存（本機） |
-| Python | 3.11 | Producer / Consumer 邏輯 |
+| PostgreSQL | 15 | 結構化資料儲存 |
+| Streamlit | 1.35.0 | 報表視覺化 Dashboard |
+| Python | 3.11 | Producer / Consumer / Dashboard 邏輯 |
 | Docker Compose | — | 容器化部署 |
 | kafka-python | 2.0.2 | Python Kafka client |
 | psycopg2 | 2.9.9 | Python PostgreSQL driver |
@@ -51,78 +52,53 @@ NewsAPI
 ## 前置需求
 
 - **Docker Desktop**（已安裝並運行）
-- **本機 PostgreSQL**（port 5432 已在運行）
 - **NewsAPI 金鑰**（免費申請：[newsapi.org/register](https://newsapi.org/register)）
 
 ---
 
 ## 快速啟動
 
-### Step 1：準備本機 PostgreSQL
-
-在本機 PostgreSQL 建立 database 和使用者：
-
-```sql
--- 以 superuser 身份執行（例如 postgres）
-CREATE DATABASE newsdb;
-CREATE USER newsuser WITH PASSWORD 'your_password';
-GRANT ALL PRIVILEGES ON DATABASE newsdb TO newsuser;
-```
-
-執行建表 SQL：
-
-```bash
-psql -U newsuser -d newsdb -f database/init.sql
-```
-
-### Step 2：設定環境變數
+### Step 1：設定環境變數
 
 ```bash
 cp .env.example .env
-# 編輯 .env，填入以下值：
+# 編輯 .env，填入：
 # NEWSAPI_KEY=your_key_here
-# POSTGRES_USER=newsuser
-# POSTGRES_PASSWORD=your_password
-# POSTGRES_DB=newsdb
+# POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB
 ```
 
-### Step 3：初始化 Airflow
+### Step 2：首次啟動
 
 ```bash
-# 初始化 Airflow metadata DB
-docker compose run --rm airflow-webserver airflow db migrate
-
-# 建立管理員帳號
-docker compose run --rm airflow-webserver airflow users create \
-  --username admin --password admin \
-  --firstname Admin --lastname User \
-  --role Admin --email admin@example.com
+./scripts/setup.sh
 ```
 
-### Step 4：啟動所有服務
+腳本會自動啟動 PostgreSQL、初始化 Airflow、建立管理員帳號並啟動所有服務。
+
+### Step 3：服務入口
+
+| 服務 | 網址 | 說明 |
+|------|------|------|
+| Airflow UI | http://localhost:8080 | DAG 管理與監控 |
+| Dashboard | http://localhost:8501 | 報表視覺化 |
+
+---
+
+## Docker Compose 版本說明
+
+本專案提供兩個 Compose 檔案：
+
+| 檔案 | PostgreSQL | 適用情境 |
+|------|-----------|---------|
+| `docker-compose.yml` | 外部（host.docker.internal） | 已有獨立 PostgreSQL 容器或本機 DB |
+| `docker-compose.full.yml` | 內含（自動建立容器） | 一鍵啟動、完全自給自足 |
 
 ```bash
+# 使用外部 PostgreSQL
 docker compose up -d
-```
 
-### Step 5：驗證
-
-```bash
-# 1. 確認容器都在跑
-docker compose ps
-
-# 2. 看 Producer log（應看到 "Fetched N articles" 和 "Sent N messages"）
-docker compose logs -f producer
-
-# 3. 看 Consumer log（應看到 "INSERTED: ..." 或 "DUPLICATE: ..."）
-docker compose logs -f consumer
-
-# 4. 查詢 PostgreSQL 資料筆數
-psql -U newsuser -d newsdb \
-  -c "SELECT COUNT(*), MIN(created_at), MAX(created_at) FROM news_articles;"
-
-# 5. 開啟 Airflow UI
-open http://localhost:8080  # admin / admin
+# 使用內建 PostgreSQL（一鍵啟動）
+docker compose -f docker-compose.full.yml up -d
 ```
 
 ---
@@ -131,7 +107,8 @@ open http://localhost:8080  # admin / admin
 
 ```
 news-streaming-pipeline/
-├── docker-compose.yml          # 服務定義（Kafka + Zookeeper + Airflow）
+├── docker-compose.yml          # 使用外部 PostgreSQL
+├── docker-compose.full.yml     # 含內建 PostgreSQL（自給自足）
 ├── .env.example                # 環境變數範本
 ├── .gitignore
 ├── README.md
@@ -155,6 +132,11 @@ news-streaming-pipeline/
 │   └── dags/
 │       ├── pipeline_health_dag.py   # 每小時健康檢查
 │       └── daily_report_dag.py      # 每日批次統計
+│
+├── dashboard/
+│   ├── app.py                  # Streamlit 報表頁面
+│   ├── Dockerfile
+│   └── requirements.txt
 │
 ├── database/
 │   └── init.sql                # 建表 SQL
@@ -243,7 +225,6 @@ A: 免費方案每天 100 次請求。將 `FETCH_INTERVAL_SECONDS` 調高至 900
 
 - **多資料來源**：加入 RSS feed（BBC、Reuters）補充 NewsAPI 的免費限制
 - **Schema Registry**：使用 Confluent Schema Registry 管理 Kafka 訊息格式
-- **Dashboard**：接 Grafana 或 Metabase 視覺化 `pipeline_stats`
 - **告警通知**：Airflow 健康檢查失敗時，透過 SlackWebhookOperator 發送通知
 - **S3 Archive**：Consumer 同時將 raw JSON 備份至 S3，建立 data lake
 - **資料品質報告**：用 Great Expectations 取代自訂 `validate_article()`

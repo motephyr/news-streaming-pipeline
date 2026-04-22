@@ -13,7 +13,6 @@ daily_report_dag.py — 每日批次統計 DAG
   使用 context["ds"]（Airflow 的 execution date，格式 "YYYY-MM-DD"）
   而非 datetime.now()。
   好處：重跑同一天的 DAG，結果相同，不會產生重複 stats 記錄。
-  這是 Data Engineering 的重要設計原則，面試常問。
 
 實際工作中的延伸：
   stats 資料可接 Grafana、Metabase 等 BI 工具做成 dashboard，

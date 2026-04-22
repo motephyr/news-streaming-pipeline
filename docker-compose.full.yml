@@ -1,9 +1,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# News Real-time Streaming Pipeline
+# docker-compose.full.yml — 含 PostgreSQL 的完整版本（自給自足）
 #
-# PostgreSQL：使用獨立的 Docker postgres 容器（host.docker.internal:5432）
-#
-# 服務啟動順序：zookeeper → kafka → producer / consumer → airflow / dashboard
+# 使用方式：docker compose -f docker-compose.full.yml up -d
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
@@ -45,7 +43,27 @@ services:
       timeout: 10s
       retries: 10
 
-  # ── 3. Kafka Producer ────────────────────────────────────────────────────────
+  # ── 3. PostgreSQL ────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    env_file: .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── 4. Kafka Producer ────────────────────────────────────────────────────────
   producer:
     build: ./producer
     container_name: producer
@@ -53,21 +71,25 @@ services:
       kafka:
         condition: service_healthy
     env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
     restart: on-failure
 
-  # ── 4. Kafka Consumer ────────────────────────────────────────────────────────
+  # ── 5. Kafka Consumer ────────────────────────────────────────────────────────
   consumer:
     build: ./consumer
     container_name: consumer
     depends_on:
       kafka:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
     restart: on-failure
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
 
-  # ── 5. Airflow Webserver ──────────────────────────────────────────────────────
+  # ── 6. Airflow Webserver ──────────────────────────────────────────────────────
   airflow-webserver:
     build: ./airflow
     container_name: airflow-webserver
@@ -76,7 +98,8 @@ services:
       - "8080:8080"
     env_file: .env
     environment:
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@host.docker.internal:${POSTGRES_PORT}/${POSTGRES_DB}
+      POSTGRES_HOST: postgres
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
@@ -84,39 +107,46 @@ services:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
       - airflow_logs:/opt/airflow/logs
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: on-failure
 
-  # ── 6. Airflow Scheduler ──────────────────────────────────────────────────────
+  # ── 7. Airflow Scheduler ──────────────────────────────────────────────────────
   airflow-scheduler:
     build: ./airflow
     container_name: airflow-scheduler
     command: scheduler
     env_file: .env
     environment:
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@host.docker.internal:${POSTGRES_PORT}/${POSTGRES_DB}
+      POSTGRES_HOST: postgres
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
       - airflow_logs:/opt/airflow/logs
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: on-failure
 
-  # ── 7. Streamlit Dashboard ────────────────────────────────────────────────────
+  # ── 8. Streamlit Dashboard ────────────────────────────────────────────────────
   dashboard:
     build: ./dashboard
     container_name: dashboard
     ports:
       - "8501:8501"
     env_file: .env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    environment:
+      POSTGRES_HOST: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: on-failure
 
 # ── Volumes ───────────────────────────────────────────────────────────────────
 volumes:
   airflow_logs:
+  postgres_data:

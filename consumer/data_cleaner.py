@@ -24,8 +24,6 @@ def generate_article_id(url: str) -> str:
     - SHA-256 長度固定（64 hex chars），適合做 UNIQUE index
     - 相同 URL 永遠產生相同 hash（deterministic）→ 去重可靠
     - 即使 Consumer 因 crash 重啟，相同文章不會重複寫入
-
-    面試說明重點：這是 idempotent（冪等）寫入的核心機制。
     """
     return hashlib.sha256(url.encode("utf-8")).hexdigest()
 
