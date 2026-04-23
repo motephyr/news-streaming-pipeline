@@ -45,7 +45,8 @@ NewsAPI
 | Python | 3.11 | Producer / Consumer / Dashboard 邏輯 |
 | Docker Compose | — | 容器化部署 |
 | kafka-python | 2.0.2 | Python Kafka client |
-| psycopg2 | 2.9.9 | Python PostgreSQL driver |
+| SQLAlchemy | 2.0.30 | DB 存取層（Consumer / Airflow / Dashboard） |
+| psycopg2-binary | 2.9.9 | PostgreSQL driver（SQLAlchemy 的 DBAPI） |
 
 ---
 

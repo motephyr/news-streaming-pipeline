@@ -103,6 +103,10 @@ def main():
             print(f"[Consumer] DB ERROR: {e}")
             # DB 連線可能已斷線，嘗試重新連線
             try:
+                conn.close()
+            except Exception:
+                pass
+            try:
                 conn = get_connection()
                 print("[Consumer] DB reconnected.")
             except Exception as reconnect_err:

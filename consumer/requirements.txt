@@ -1,3 +1,4 @@
 kafka-python==2.0.2      # 純 Python Kafka client
 psycopg2-binary==2.9.9   # PostgreSQL driver（-binary 版本不需要編譯 libpq）
+sqlalchemy==2.0.30       # SQLAlchemy Core（DB 存取層）
 python-dotenv==1.0.0     # 從 .env 載入環境變數

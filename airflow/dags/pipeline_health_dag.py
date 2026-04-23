@@ -20,10 +20,10 @@ pipeline_health_dag.py — Pipeline 健康檢查 DAG
 import os
 from datetime import datetime, timedelta, timezone
 
-import psycopg2
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.utils.dates import days_ago
+from sqlalchemy import create_engine, text
 
 # ── DAG 預設參數 ───────────────────────────────────────────────────────────────
 default_args = {
@@ -40,29 +40,29 @@ def check_pipeline_health(**context):
     context 是 Airflow 傳入的執行上下文（execution date、run_id 等），
     使用 **kwargs 接收是 Airflow PythonOperator 的標準做法。
     """
-    conn = psycopg2.connect(
-        host=os.environ["POSTGRES_HOST"],
-        port=int(os.environ.get("POSTGRES_PORT", 5432)),
-        dbname=os.environ["POSTGRES_DB"],
-        user=os.environ["POSTGRES_USER"],
-        password=os.environ["POSTGRES_PASSWORD"],
+    host = os.environ["POSTGRES_HOST"]
+    port = int(os.environ.get("POSTGRES_PORT", 5432))
+    dbname = os.environ["POSTGRES_DB"]
+    user = os.environ["POSTGRES_USER"]
+    password = os.environ["POSTGRES_PASSWORD"]
+    engine = create_engine(
+        f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{dbname}",
+        pool_pre_ping=True,
     )
 
     two_hours_ago = datetime.now(timezone.utc) - timedelta(hours=2)
 
-    with conn.cursor() as cur:
+    with engine.connect() as conn:
         # 查詢最近 2 小時內寫入的文章數
-        cur.execute(
-            "SELECT COUNT(*) FROM news_articles WHERE created_at > %s",
-            (two_hours_ago,),
-        )
-        recent_count = cur.fetchone()[0]
+        recent_count = conn.execute(
+            text("SELECT COUNT(*) FROM news_articles WHERE created_at > :two_hours_ago"),
+            {"two_hours_ago": two_hours_ago},
+        ).scalar_one()
 
         # 同時查詢總文章數，方便觀察整體成長
-        cur.execute("SELECT COUNT(*) FROM news_articles")
-        total_count = cur.fetchone()[0]
-
-    conn.close()
+        total_count = conn.execute(
+            text("SELECT COUNT(*) FROM news_articles")
+        ).scalar_one()
 
     print(f"[HealthCheck] Articles in last 2h: {recent_count}")
     print(f"[HealthCheck] Total articles in DB: {total_count}")

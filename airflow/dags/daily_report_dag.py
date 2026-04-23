@@ -19,14 +19,14 @@ daily_report_dag.py — 每日批次統計 DAG
   或用 EmailOperator 每天寄發報表給 stakeholders。
 """
 
+import json
 import os
 from datetime import timedelta
 
-import psycopg2
-from psycopg2.extras import Json
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.utils.dates import days_ago
+from sqlalchemy import create_engine, text
 
 default_args = {
     "owner": "data-engineer",
@@ -46,56 +46,60 @@ def generate_daily_report(**context):
     report_date = context["ds"]
     print(f"[DailyReport] Generating report for date: {report_date}")
 
-    conn = psycopg2.connect(
-        host=os.environ["POSTGRES_HOST"],
-        port=int(os.environ.get("POSTGRES_PORT", 5432)),
-        dbname=os.environ["POSTGRES_DB"],
-        user=os.environ["POSTGRES_USER"],
-        password=os.environ["POSTGRES_PASSWORD"],
+    host = os.environ["POSTGRES_HOST"]
+    port = int(os.environ.get("POSTGRES_PORT", 5432))
+    dbname = os.environ["POSTGRES_DB"]
+    user = os.environ["POSTGRES_USER"]
+    password = os.environ["POSTGRES_PASSWORD"]
+    engine = create_engine(
+        f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{dbname}",
+        pool_pre_ping=True,
     )
 
-    with conn.cursor() as cur:
+    with engine.begin() as conn:
         # ── 1. 當日文章總數 ────────────────────────────────────────────────────
-        cur.execute(
-            "SELECT COUNT(*) FROM news_articles WHERE DATE(created_at) = %s",
-            (report_date,),
-        )
-        total_articles = cur.fetchone()[0]
+        total_articles = conn.execute(
+            text("SELECT COUNT(*) FROM news_articles WHERE DATE(created_at) = :report_date"),
+            {"report_date": report_date},
+        ).scalar_one()
 
         # ── 2. 各來源文章數 ────────────────────────────────────────────────────
         # 結果範例：{"BBC News": 12, "CNN": 8, "Reuters": 5}
-        cur.execute(
-            """
+        source_rows = conn.execute(
+            text("""
             SELECT source_name, COUNT(*) AS cnt
             FROM news_articles
-            WHERE DATE(created_at) = %s
+            WHERE DATE(created_at) = :report_date
             GROUP BY source_name
             ORDER BY cnt DESC
-            """,
-            (report_date,),
-        )
-        sources = {row[0] or "Unknown": row[1] for row in cur.fetchall()}
+            """),
+            {"report_date": report_date},
+        ).all()
+        sources = {row[0] or "Unknown": row[1] for row in source_rows}
 
         # ── 3. 寫入統計結果 ────────────────────────────────────────────────────
         # ON CONFLICT (report_date) DO UPDATE：
         # 需要搭配 DB 的 unique index (report_date)。
         # 這樣重跑同一天會覆蓋該日統計，確保冪等。
-        cur.execute(
-            """
+        conn.execute(
+            text("""
             INSERT INTO pipeline_stats (report_date, total_articles, duplicate_count, error_count, sources)
-            VALUES (%s, %s, %s, %s, %s)
+            VALUES (:report_date, :total_articles, :duplicate_count, :error_count, CAST(:sources AS JSONB))
             ON CONFLICT (report_date)
             DO UPDATE SET
                 total_articles = EXCLUDED.total_articles,
                 duplicate_count = EXCLUDED.duplicate_count,
                 error_count = EXCLUDED.error_count,
                 sources = EXCLUDED.sources
-            """,
-            (report_date, total_articles, 0, 0, Json(sources)),
+            """),
+            {
+                "report_date": report_date,
+                "total_articles": total_articles,
+                "duplicate_count": 0,
+                "error_count": 0,
+                "sources": json.dumps(sources, ensure_ascii=False),
+            },
         )
-
-    conn.commit()
-    conn.close()
 
     # 印出統計摘要（會顯示在 Airflow Task log 裡）
     print(f"[DailyReport] Date: {report_date}")
